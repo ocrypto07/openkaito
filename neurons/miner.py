@@ -19,6 +19,7 @@ import os
 import time
 import openai
 from datetime import datetime
+import threading
 
 import bittensor as bt
 from dotenv import load_dotenv
@@ -43,41 +44,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-class Miner(BaseMinerNeuron):
-    """
-    Your miner neuron class. You should use this class to define your miner's behavior. In particular, you should replace the forward function with your own logic. You may also want to override the blacklist and priority functions according to your needs.
-    This class inherits from the BaseMinerNeuron class, which in turn inherits from BaseNeuron. The BaseNeuron class takes care of routine tasks such as setting up wallet, subtensor, metagraph, logging directory, parsing config, etc. You can override any of the methods in BaseNeuron if you need to customize the behavior.
-    This class provides reasonable default behavior for a miner such as blacklisting unrecognized hotkeys, prioritizing requests based on stake, and forwarding requests to the forward function. If you need to define custom
-    """
+# Lock to prevent multiple threads from accessing WebSocket concurrently
+ws_lock = threading.Lock()
 
+class Miner(BaseMinerNeuron):
     def __init__(self):
         super(Miner, self).__init__()
 
-        # skip intialization and wallet check when in debug mode, which only unit tests its forward methods
-
-    # DEPRECATED: delete the function as no longer used
-    async def forward_search(self, query: SearchSynapse) -> SearchSynapse:
-        pass
-
-    # DEPRECATED: delete the function as no longer used
-    async def forward_structured_search(
-        self, query: StructuredSearchSynapse
-    ) -> StructuredSearchSynapse:
-        pass
-
-    # DEPRECATED: delete the function as no longer used
-    async def forward_semantic_search(
-        self, query: SemanticSearchSynapse
-    ) -> SemanticSearchSynapse:
-        pass
-
-    # DEPRECATED: delete the function as no longer used
-    async def forward_discord_search(
-        self, query: DiscordSearchSynapse
-    ) -> DiscordSearchSynapse:
-        pass
-
-    # Example of a text embedding function
     async def forward_text_embedding(
         self, query: TextEmbeddingSynapse
     ) -> TextEmbeddingSynapse:
@@ -86,7 +59,6 @@ class Miner(BaseMinerNeuron):
         import openai
 
         client = openai.OpenAI(
-            #api_key=os.getenv("OPENAI_API_KEY"),
             api_key=os.environ["OPENAI_API_KEY"],
             organization=os.getenv("OPENAI_ORGANIZATION"),
             project=os.getenv("OPENAI_PROJECT"),
@@ -99,6 +71,10 @@ class Miner(BaseMinerNeuron):
         query.results = embeddings.tolist()
         return query
 
+    def safe_get_current_block(self):
+        with ws_lock:
+            return self.subtensor.get_current_block()
+
     def print_info(self):
         metagraph = self.metagraph
         self.uid = self.metagraph.hotkeys.index(self.wallet.hotkey.ss58_address)
@@ -107,7 +83,7 @@ class Miner(BaseMinerNeuron):
             "Miner | "
             f"Epoch:{self.step} | "
             f"UID:{self.uid} | "
-            f"Block:{self.block} | "
+            f"Block:{self.safe_get_current_block()} | "
             f"Stake:{metagraph.S[self.uid]} | "
             f"Rank:{metagraph.R[self.uid]} | "
             f"Trust:{metagraph.T[self.uid]} | "
@@ -118,9 +94,6 @@ class Miner(BaseMinerNeuron):
         bt.logging.info(log)
 
     def check_version(self, query):
-        """
-        Check the version of the incoming request and log a warning if it is newer than the miner's running version.
-        """
         if (
             query.version is not None
             and compare_version(query.version, get_version()) > 0
@@ -129,15 +102,13 @@ class Miner(BaseMinerNeuron):
                 f"Received request with version {query.version}, is newer than miner running version {get_version()}. You may updating the repo and restart the miner."
             )
 
-
-# This is the main function, which runs the miner.
 if __name__ == "__main__":
     with Miner() as miner:
-
         miner_hotkey = miner.wallet.hotkey.ss58_address
         print(f"My Miner hotkey: {miner_hotkey}")
         time.sleep(120)
         while True:
             miner.print_info()
             time.sleep(30)
+
 
